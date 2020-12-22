@@ -58,7 +58,7 @@ My code does not yet detect for such changes, but it will in the future.
 and 140 (20%) where the artists' webpage did not help.
 This leaves a comfortable 528 (75.4%) out of 700 where the program
 and the webpage worked perfectly well together.  The distribution 
-of albums per artist is shown (from 0 minumum to 86 maximum)
+of albums per artist is shown (from 0 minimum to 86 maximum)
 and averages to about 7.8 albums per artist.
 
 Blaming others
