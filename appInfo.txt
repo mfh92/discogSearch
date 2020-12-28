@@ -512,21 +512,19 @@ def delByLang( r, data ):
   toDel = []                                             #  del non-English data if it
   for i in data.keys():                                  #    is paired w/ dup English data.
     try:               
-      dtLngI = detect( data[i] )                         #  detectedLanguage from the  langdetect  module  
-    except:                              
-      continue                                           #  skip to the next key
-    finally:
+      dtLngI = detect( data[i] )                         #  detectedLanguage from the  langdetect  module   
       if not (True in (e in dtLngI for e in englshLke)):
         for j in data.keys():                            # '!=' checks both directions at once
-          ip = r[i].parent.text ;  jp = r[j].parent.text
-          if ( (i != j) and (ip == jp) ): 
-            try:                                         #  known to fail w/ non-alpha strings 
-              dtLngJ = detect( data[j] )                 #    and possibly also w/ other bad input.
-            except:                     
+          if ( (i != j) and (r[i].parent.text == r[j].parent.text) ): 
+            try:                                        
+              dtLngJ = detect( data[j] )                 #  known to fail w/ non-alpha strings                 
+            except:
               continue                                   #  skip to the next key
             finally:
               if (True in (e in dtLngJ for e in englshLke)):    
                 toDel.append( i )
+    except:                              
+      continue                                           #  skip to the next key
   undupToDel = list( dict.fromkeys( toDel ) )            #  i = non-E, j = E.
   print('Lang del', undupToDel)
   for m in undupToDel:                                   #  maybe also save in a seperate list    
