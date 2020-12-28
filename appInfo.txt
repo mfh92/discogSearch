@@ -521,7 +521,7 @@ def delByLang( r, data ):
           ip = r[i].parent.text ;  jp = r[j].parent.text
           if ( (i != j) and (ip == jp) ): 
             try:                                         #  known to fail w/ non-alpha strings 
-              dtLngI = detect( data[j] )                 #    and possibly also w/ other bad input.
+              dtLngJ = detect( data[j] )                 #    and possibly also w/ other bad input.
             except:                     
               continue                                   #  skip to the next key
             finally:
