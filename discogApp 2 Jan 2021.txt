@@ -1,0 +1,562 @@
+##########  Dec, 2020   (Python 3.7.4)    (no 'io' or 'csv' modules anymore)
+
+import os                                 #  only to change a directory
+import re                                 #  only to split words containing 'EP' from other words
+import time                               #  to slow down repeated requests enough to avoid being flagged as a spammer
+import requests                           #  required for bs4
+
+from langdetect  import detect                           #  to distinguish English-like text from text with non-Roman alphabets.
+
+import  pkg_resources
+pkg_resources.require("beautifulsoup4==4.9.2")           #  4.9.3  tag.get() fails
+from    bs4    import  BeautifulSoup
+
+# -----
+os.chdir("C:/Users/micks/Desktop/mh/computer skills/funPy/music search")       #  os.getcwd()  also
+
+A = [ line.rstrip('\n') for line in open('b2.csv')]      #  a list of Artists to look up
+A.insert( 0, 'skip0' )                                   #  adjust for 0-indexPy v. 1-indexXLS
+
+
+# -----  constants                                       
+sp = '\n'                        #  good for debugging. ex: print(*allAlbums, sep = sp) 
+
+maxSecNameLng = 50                                       #  un-skip sections w/ Names longer than this value, assuming that no sectionName should be longer than (or as long as) the data under it.
+
+sourceLng = 20                                           #  longer = end ,  shorter = skip (ex. 'Source:[9]\n')
+                                                         #  section startWords
+baseStarts = [ 'Discography', 'Album_discography',
+  'Select_discography',    'Selected_discography', 
+  'Solo_discography',    'Solo_album_discography',
+  'Discography_and_videography', 'Album', 'Albums',
+  'Partial_discography', 'Repertoire',  'Releases',
+  'Recordings', 'Studio_albums', 'Studio_releases',
+  ]
+                                                         #  include or skip sub-sections based on the id of its main section since the main sec was interrupted by these words
+dumbWords = [ 'the EP', 'following list', 'as noted', 
+  'where noted', 'as indicated', 'where indicated',
+  'been nominated', 'also won', 'was issued',
+  'was re-issued', 'was released', 'was re-released',
+  'was featured', 'ppeared on', 'released in',
+  'the album as', 'album came in', 'in the musical',
+  ]
+                                                         #  skip sections w/ [Compilations, Awards, Tours, Remixes, References, Singles, Accolades, Filmography, Grammy, sideman, With_others, Members, Arranger, Videos, Split_albums, Extended_plays, Bibliography, Biography, Guest_Appearances, Appearances, Demo, Artist_played_with, Various, Collaborative, DVD, Appears_on, Musician, Bootleg, Comics, Producer, Reviews, Miscellaneous, Tribute, Accompanist, Legacy, Books, Photobooks, Fandom, Lineup, Line-up, Line up, Films, Television, Box Set, Movies, Radio, Poetry, Departure, Reissues, Re-releases, Related Bands, Timeline, Musical Style, '(hit records)', 'Best albums', Reception, Concerts (must be plural), Broadway, Dance, Critical Acclaim, Contributions, Mixtape, Acting Credits, Songs, Engineered, Mixed, Gallery, Covers of _, Audio clips, Personnel, Actor (u.c. only), Best of (u.c. only) ] - even if lower-case or singular.  Maybe not skip 'Other' ??
+skipWords = [ 'ompila', 'ward', 'Tour', 'emix',
+  'ingle',  'ccolad', 'ilmogr', 'rammy', 'ideman', 
+  'Other', 'other', 'rrange', 'embers', 'ember of', 
+  'band member of', 'ideo',  'plit', 'xtend', 'uest',
+  'emo', 'ayed', 'ariou', 'ollab', 'DVD', 'VHS', 'ppear',
+  'usicia', 'ootleg', 'heatre', 'Theater', 'nmade',
+  'omics', 'oducer', 'oducti', 'eview', 'iscell', 'ribut',
+  'ccomp', 'egacy', 'Book', 'book', 'Fandom', 'ineup',
+  'ine-up', 'ine Up', 'ine up', 'Film', 'film', 'levisio',
+  'ox set', 'ox Set', 'ovies', 'adio', 'oetry', 'epartu',
+  'eissu', 'e-rele', 'elated', 'imelin', 'tyle', '(hit r',
+  'Best al', 'eception', 'ncerts', 'oadway', 'Dance',
+  'dance', 'ical ac', 'ical Ac', 'ontribu', 'ixtape',
+  'cting cred', 'cting Cred', 'Songs',  'songs', 'nginee',
+  'mixed', 'Mixed', 'allery', 'overs of', 'udio clip', 
+  'rsonnel', 'Actor', 'Best of',
+  ]
+                                                         #  end section searching w/ [References, Sources, External_Links, Bibliography, Biography, See_also, Notes, Footnotes, Endorsements, Production, Song Inspirations, Further Reading, Fictional Discography, Controversy, 'Published articles', 'Categories']   Assuming that a 'Performance Discog.' precedes a 'Production Discog.' 
+enddWords = [ 'eferen', 'ource', 'xterna', 'Link',
+  'iblio', 'iogra', 'See also', 'Also see', 'See Also',
+  'Also See', 'Note', 'Notes', 'ootnot', 'ndorse', 
+  'oducti', 'ong inspir', 'Reading', 'reading',
+  'ictional', 'ontrover', 'rticles', 'ast edited',
+  ]               
+                                                         #  assuming no album titles use these words+punctuation
+unAlbmWrds = [ 'CITATION', 'TEMPLATE', 'BILLBOARD',
+  '(JANUA', '(FEBRU', '(MARCH', '(APRIL', '(MAY',
+  '(JUNE', '(JULY', '(AUGUS', '(SEPTEM', '(OCTOB',
+  '(NOVEM', '(DECEM', 'FIND SOURC', '(PARTIAL',
+  'DETAILED LI', 'COMPLETE DI', ': THE STORY OF',
+  'YING THIS FILE', 'ERENT TITLE', 'ED. ',
+  'AN EDITION', 
+  ]                 
+                                                         #  same-album dup removal
+reIssuWrds = [ 'lso issued', 'eissued', 'e-issued', 
+  'dentical music', 'eprint', 'e-released',
+  'ka ', '.k.a.', '. k. a.', 's part of', 
+  'lso entit', 'lso title', 'ther editio',
+  'ssued in', 'ssued as', 'eleased as', 
+  'dition of', 'lso known as',
+  ]                                           
+                                                         #  un-skip albums that were sched to skip since a 'concert'
+unConcert = ['CONCERTO', 'CONCERT ORCHESTRA',
+  'CONCERT BAND'
+  ]
+                                                         #  un-skip parents that were sched to skip since w/ 'TV'
+unTVWords = ['TVT R', 
+  'TV FREAK'
+  ]
+
+#  to-do: 'released ... as'
+#  to-do: '... with B' (where B != Artist A)    
+                                                         #  album filtering = remove music with the wrong format (only full albums allowed)
+formatWds = [ '7"', '10"', 'REMIX', 'XTENDED',
+  'COMPIL', 'SPLIT AL', 'VARIOUS', 'COLLABO',
+  'LEGACY', 'BOX SET', 'BOXED SET', 'BOOTL',
+  'LIVE CON',  'LIVE! IN', 'LIVE FROM', 'LIVE! FROM', 
+  'LIVE AT',   'LIVE! AT', 'LIVE WITH', 'LIVE! WITH',
+  'LIVE PERF',  
+  ]
+                                                         #  remove non-audio media
+vidWords = [ 'VIDEO', 'FILM', 'TV', 'TELEV', 'DVD',
+  'MOVIE', 'MOTION PIC', 'VHS',
+  ]
+                                                         #  29 = intersection( 55 avail. codes w/ 'langdetect' module  +  362 languages on www.quora.com/What-are-the-languages-that-use-the-same-alphabet-as-the-English-language )
+englshLke = [ 'af', 'ca', 'cs', 'cy', 
+  'da', 'de', 'en', 'es', 'et', 'fr', 
+  'hr', 'hu', 'id', 'it', 'lt', 'lv',
+  'nl', 'no', 'pl', 'pt', 'ro', 'sk', 
+  'sl', 'so', 'sq', 'sv', 'sw', 'tr', 'vi',
+  ]    #         Afrikaans, Catalan, Czech, Welsh, 
+#  Danish, German, English, Spanish, Estonian, French, 
+#  Croatian, Hungarian, Indonesian, Italian, Lithuanian, Latvian, 
+#  Dutch (Flemish), Norwegian, Polish, Portuguese, Romanian, Slovak, 
+#  Slovenian, Somali, Albanian, Swedish, Swahili, Turkish, Vietnamese
+
+# -----        a custom data structure based on r = resultSet from bs4
+class Sec:                                            
+  def __init__( self, rnk, sgo, txt, typ ):               
+    self.rnk = rnk                                       #  rank = i in r[i] from the bs4 resultSet
+    self.sgo = sgo                                       #  the 'stop / skip / go' condition
+    self.txt = txt                                       #  text = displayed section name
+    self.typ = typ                                       #  type = r[i].name = {'id','p',...}
+
+# -----
+def findStart( A, sp ):      
+  tryD    = baseStarts[:]                                #  list is local to each Artist
+  origLen = len( A )
+  for j in range( 0, origLen ):                          #  assuming that the primary source for an Artist under a different name would be a different url
+    tryD.append( A + '_discography' )   
+    tryD.append( 'Discography_as_' + A )                 #  remove right-end text one char at-a-time [ex. 'A_(band)' -> 'A_(band' -> 'A_(ban' -> ... ]
+    A = A[:-1]                                    
+  i = 0                                                  #  assuming no page has more than one of these sections
+  while i < len( tryD ):
+    re = sp.find( id = tryD[i] )                         #  assume 'discog' is in no other type of tag (skip <p>, etc)
+    if re: 
+      break                                              #  ok to return 'None' if no matches
+    i += 1                                               #    ex. 'Discography_(producer)' does not count
+  return re                     
+
+# -----
+def idSkipVsEnd( t, sc ):
+  u = t.upper()
+  sc.sgo  = 'endd'                                       #  default for any enddWord except 'Source'
+  dun     = True                                        
+  if 'Note' in t:
+    if 'CREDIT' in u:                                    #  skip 1-word sec, not multi-word ex. 'note: credited to...'
+      sc.sgo  = 'skip'                               
+      dun     = False
+  if 'SOURCE' in u:                                      #  'Source' sometimes is a sub-section to skip  + other times is an ending section 
+    if len( t ) > sourceLng:
+      sc.sgo  = 'skip'                                   #  must be 'elif'.  Assume only 1 of the 2 conditions will apply.
+      dun     = False
+    elif ('References in' in t):                         #  all un-avoided sections are included up to the first enddWord, then stop
+      sc.sgo  = 'skip'                                   #  ex. 'References in X to A' may precede the Discography and 'end References' for TheArtist A
+      dun     = False
+  return sc, dun
+
+# ---  -  -  Sec( .rnk, .sgo, .txt, .typ )
+def idSec( allSc, tg, ritg, tp ):                        #  ritg = r.index(tg)
+  tTx     = tg.text
+  UTX     = tTx.upper()                                  #  tp may be 'id' or 'tg.name', but not <span>  
+  tTBrCt  = tTx.count('\n')
+  doneNow = False
+  newSc   = Sec( ritg, '', tTx, tp )
+  if ('DISCOG' in UTX):                                  #  possibly multiple sections to be checked later.  Assuming it would be too redundant for a page to have both a (regular)'Discog' and an (ArtistName)'Discog' at once. 
+    newSc.sgo = 'unkDisc'                                #    the 3 types of 'unk's may be combined or separated
+  elif ( True in (e in tTx for e in dumbWords) ):        #  check for sub-section notes before EP check
+    newSc.sgo = 'unkSubSc'
+  elif ( max( tTBrCt, len(tg.find_all('li')) ) > 1 ):    #  assume no section name needs multiple lines 
+    newSc.sgo = 'unkData'
+  elif ( True in (e in tTx for e in skipWords) ):        #  assuming skipWords is a complete list of section names to avoid
+    if 'ilm sound' not in tTx:                           #  'Film soundtracks' are not skipped, but 'Films' are skipped.
+      if ( len( tTx ) < maxSecNameLng ):                 #  yes skip genuine sections w/ short secTitles, but do not skip a section which included a skipWord that is irrelevant to the rest of the data
+        newSc.sgo = 'skip'          
+        Comment = 'here'                                 #  prevent some duplicate results
+  elif ( ('WITH' in UTX) | ('EP' in tTx) ):              #  w/o  + EP + album = good = no  skip    elif since the previous condition applies to a pseudo-section, not a real Sec.  Don't include many reasons to change OK2Add.
+    if ('EP' in tTx):                                    #  w/o  + EP         = bad  = yes skip
+      if ('lbum' not in tTx):                            #  w/o       + album = good               Yes add sections named "without [this Artist]", but not ones "with [another group]".
+        newSc.sgo = 'skip'                               #  w/o               = good     
+        Comment = 'here'                                 #  with + EP + album = good               Yes add a combo. "Album and EP" section, but not one for only EPs.          
+    elif ('ithout' not in tTx):                          #  with + EP         = bad         
+      newSc.sgo = 'skip'                                 #  with      + album = bad   
+      Comment = 'here'                                   #  with              = bad         
+  if ( ('LIVE' in UTX) and (newSc.sgo != 'unkData') ):
+    if ('STUDIO' not in UTX ):                           #  allow a 'Live and Studio' combo.
+      newSc.sgo = 'skip' 
+  if len( newSc.sgo ) < 1:                               #  if no  sgo  yet
+    if ( True in (e in tTx for e in enddWords) ):
+      newSc, doneNow = idSkipVsEnd( tTx, newSc )         #  different urls use the same words for different purposes
+    else:
+      newSc.sgo = 'okSc'                                 #  default if not skip or endd
+  if len( tTx ) > 1: 
+    allSc.append( newSc )                                #  skip 1-letter sections
+  minL = min( len(newSc.txt), 20 )
+  print( 'r', newSc.rnk, newSc.sgo, newSc.txt[0:minL] ) 
+  return allSc, doneNow
+
+# -----
+def bettrSectns( sc ):    #  sc = .rnk + .sgo + .txt + .typ
+  for j in sc:
+    if (j.sgo == 'unkDisc'):
+      if j.rnk == 0:                                     #  use only the initial discog, 
+        j.sgo = 'okSc'                                   #    not "B discog" where B is a different artist than A
+      else: 
+        j.sgo = 'skip'
+  i = 0 
+  ya = ['unkSubSc', 'unkData']
+  for j in sc:
+    if ( (j.sgo in ya) & (i > 0) ):                      #  change the id of a sub-section to that of its parent section 
+      prevJ = sc[ i-1 ]                            
+      j.sgo = prevJ.sgo
+    i += 1                                              
+  return sc                                         
+
+# -----
+def getSections( r ):  #  .rnk + .sgo + .txt + .typ  =  sc
+  zc =      [ Sec( 0,'okSc', r[0].text, r[0].name ) ]    #  the 0th index always starts an OK Section
+  for tg in r:                                              
+    if (len(tg.text) > 2):
+      if not (tg.text.startswith('[') or  \
+              tg.text.startswith('cita') ):                #  skip 'citation' sections. 
+        if tg.get('id'):                                   #  avoid dups by checking    
+          zc, dun = idSec( zc, tg, r.index(tg), 'id' )     #    each type only one-at-a-time w/ elif's
+          if dun: break
+        elif tg.name in ['p','dt']:                        #  attr 'id' is not a 'name'                  
+          zc, dun = idSec( zc, tg, r.index(tg), tg.name )  #    also 'li', 'td' ??
+          if dun: break
+  undupd = []                                            #  remove any duplicates
+  for i in zc:
+    if i.rnk not in [ undupd[j].rnk for j in range(0,len(undupd)) ]:
+      undupd.append( i )
+  undupd.sort( key = lambda x: x.rnk )                   #  can not 'return u.sort()' in 1 step
+  btrSec = bettrSectns( undupd )                         #  sc improved 
+  print('(', len(undupd), 'sections total )')
+  return btrSec
+
+# -----
+def getResults( r, sc ):                                 #  sc = Sec( .rnk, .sgo, .txt, .typ )  data structure
+  i = 0                        
+  brks  = [ e.rnk for e in sc ]                          #  each break is the start of a new section (any type of sec)
+  yesEm = []                                             #  good indeces for r
+  for j in range( 0, len(sc) - 1 ):
+    for k in range( brks[j], brks[j+1] ):                #  Each sec ends 1 before the next sec.
+      if sc[j].sgo == 'okSc':                            #    And the last sec ends 1 before the 1st enddWord.
+        yesEm.append( k )                                  
+  rByThisARaw = {}                                       #  Raw may have dups
+  rByThisA    = {}  
+  for y in yesEm:                                        #  each tag from 'Discog' to 1st_endd section
+    toAdd = r[y].text.strip()
+    if ( (r[y].name == 'i') and (safAlbm( toAdd )) ):    #  strip whitespace from both ends      
+      rByThisARaw[ y ] = toAdd
+  for k, v in rByThisARaw.items():                       #  check new tag against old records
+      if v not in rByThisA.values():                     #    do not allow a tag of tags. Ex. 'unique' tags = 17 with this logic, not 42 w/out it.
+        rByThisA[ k ] = v                                #    This also removes duplicates.
+  return rByThisA                                        #  skip album names with citations or other messages different than an album title.  Keep index of r + text, but not tags
+
+# -----
+def safAlbm( st ):
+  if not st:                                             #  False if st is empty
+    return False
+  if (st.startswith('[') or \
+      st.startswith('cita') ):                           #  skip 'citation' sections. 
+    return False
+  else:
+    u = st.upper()                                       #  False = not True  if  a match
+  return not ( True in (e in u for e in unAlbmWrds) )    #  True  = not False if no match
+
+# -----
+def delBooks( r, data ):                                 #  data = dict(k = indices, v = text) 
+  toDel = []
+  for i in data.keys():                                  #  assuming that all books list an ISBN
+    if 'ISBN' in r[i].parent.text:                       #    also assuming that the parent does not contain multiple data
+      toDel.append( i )                                  
+    if 'Billboard' in r[i].text:                         #  assuming that no album title uses these words
+      toDel.append( i )
+    if 'agazin' in r[i].text:                            #    (ditto)
+      toDel.append( i )
+  undupToDel = list( dict.fromkeys( toDel ) )
+  print('books del', undupToDel)
+  for m in undupToDel:                                   #  maybe also save in a seperate list    
+    data.pop( m )
+  return data
+
+# -----                                                  #  data = dict(k = indices, v = text) 
+def delByLang( r, data ):
+  toDel = []                                             #  del non-English data if it
+  for i in data.keys():                                  #    is paired w/ dup English data.
+    try:               
+      dtLngI = detect( data[i] )                         #  from the  langdetect  module  
+      if not (True in (e in dtLngI for e in englshLke)):
+        for j in data.keys():                            # '!=' checks both directions at once
+          if ( (i != j) and (r[i].parent.text == r[j].parent.text) ): 
+            try:
+              dtLngJ = detect( data[j] )                 
+            except:
+              continue                                   #  skip to the next key
+            finally:
+              if (True in (e in dtLngJ for e in englshLke)):    
+                toDel.append( i )
+    except:                              
+      continue                                           #  skip to the next key
+  undupToDel = list( dict.fromkeys( toDel ) )            #  i = non-E, j = E.
+  print('Lang del', undupToDel)
+  for m in undupToDel:                                   #  maybe also save in a seperate list    
+    data.pop( m )
+  return data
+
+# -----
+def delSingles( r, data ):                               #  data = dict(k = indices, v = text) 
+  toDel = []
+  for i in data.keys():                                  #  data = audio albums only, not any other form of media
+    phrse = r[i].parent.text                            
+    u = phrse.upper()
+    if 'EP' in u:                                        #  test separately from other formatWds
+      v   = re.split(r'\s', u)                           #  words from splitting u by whitespaces 
+      w   = [re.sub(r'\W+', '', e) for e in v]           #  remove chars like '().,' from each word, even if not on an end (ex. 'E.P.' -> 'EP')
+      b   = ['EP' in e for e in w]                       #  booleans
+      idx = [j for j, val in enumerate(b) if val]        #  1000+ words contain 'ep' = too many to list
+      for k in idx:                                      #  do not delete the same data more than once, even if multiple bad words in it
+        if ( (i not in toDel) and (w[k] == 'EP') ):       
+          toDel.append( i )                              #  assuming no other '_ep' 3-letter words will be used    
+    if           'CONCERT' in u:
+      if not (True in (e in u for e in unConcert)):      #  ex. 'Concerto' contains 'Concert' (a bad format)
+        toDel.append( i )                                  
+    if           'TRIBUTE' in u:
+      if not ('DISTRIBUTE' in u):                        #  'Distributed' contains 'tribute' (a bad format)
+        toDel.append( i )                                  
+    if         'LIVE IN'   in u:                         #  probably a live recording
+      if not  ('LIVE INTO' in u):                        #  probably not  (ditto)
+        toDel.append( i )                                  
+    if        'SINGLE'  in u:
+      if not ('SINGLES' in u):                           #  save an album w/ plural 'singles', but not a single 'single'
+        toDel.append( i )                                  
+    if (True in (e in u for e in formatWds)):            #  all other bad formats
+      toDel.append( i )                                
+  undupToDel = list( dict.fromkeys( toDel ) )
+  print('singls del', undupToDel)
+  for m in undupToDel:                                   #  maybe also save in a seperate list    
+    data.pop( m )
+  return data
+
+# -----
+def delVideos( r, data ):                                #  data = di ct(k = indices, v = text) 
+  toDel = []
+  for i in data.keys():                                  #  data = audio albums only, not any other form of media
+    phrse = r[i].parent.text                            
+    u = phrse.upper()
+    if       (True in (e in u for e in vidWords ) ):
+      if not (True in (e in u for e in unTVWords) ):     #  un-skip some special words that contain 'TV'           
+        toDel.append( i )                                  
+  undupToDel = list( dict.fromkeys( toDel ) )
+  print('vid del', undupToDel)
+  for m in undupToDel:                                   #  maybe also save in a seperate list    
+    data.pop( m )
+  return data
+
+# -----
+def delReissus( r, data ):                               #  data = dict(k = indices, v = text) 
+  toDel = []
+  for i in data.keys():
+    phrse = r[i].parent.text                             #  parents of only data, not a len = 20000 parent of a header
+    if (True in (e in phrse for e in reIssuWrds)):
+      if data[i] in phrse:                               #  j must be 'close' to i  
+        for j in data.keys():
+          if ((i < j) and (i not in toDel) and (data[j] in phrse)):
+            if ( (r[j].parent.text in phrse) or \
+                 (phrse in r[j].parent.text) ):          #  'j == p' also works, except if w/ footnote citations
+              toDel.append( i )
+  undupToDel = list( dict.fromkeys( toDel ) )
+  print('reiss del', undupToDel)
+  for m in undupToDel:                                   #  maybe also save in a seperate list    
+    data.pop( m )
+  return data                                            #  save only the last album name (reading left-to-rt), not any earlier ones
+
+# -----
+def reportIt( msg, tA ):
+  print('start report', msg)
+  if msg == 'bad url':                                   #  better than having no info in the aCounts dict
+    aCounts[ tA ] = -1
+    print(' bad url for', A.index(tA), tA )              #  the attempt failed at this url
+    faildPage.append( tA )                 
+  if msg == 'no discog':
+    aCounts[ tA ] = -2                                   #  no Discog-type of section exists on this webpage
+    print(' no discog sec. found for', A.index(tA), tA )
+    faildDiscog.append( tA )                     
+
+# ----- main        ( was tryToScrape() )
+faildPage    = []                                        #  no webpage at this url
+faildDiscog  = []                                        #  no 'Discog' section on the webpage
+allAlbums    = []                                        #  all resulting records
+aCounts      = {}                                        #  n of albums per artist
+
+def sr( TheArtist ):                                     #  assume no auto-scraping if no 'Discography' section
+  if not A:
+    print('run >>>A = loadA()')
+  url     = 'https://en.wikipedia.org/wiki/' + TheArtist   #  no alt urls allowed   
+  respons = requests.get( url )                         
+  if not respons.ok:                                     #  <Response [200]>
+    reportIt( 'bad url', TheArtist )
+    return                    
+  soup = BeautifulSoup( respons.text, 'html.parser' )    #  must be single-quotes
+  s = findStart( TheArtist, soup )
+  if not s:                                              #  can not 'find_all' based on null s  
+    reportIt( 'no discog', TheArtist )
+    return  
+  p    = s.find_previous()                               #  go back 1 tag to include the Discog-type startTag in "next"
+  r    = p.find_all_next()                               #  create a ResultSet (of all types) after the Previous Tag
+  sc   = getSections( r )                                #  sc has custom data structure Sec( rnk + sgo + txt )
+  datA = getResults(  r, sc )      #  use .copy() if nec                   
+  print(' was', len(datA), 'before delBooks')
+  datB = delBooks(    r, datA )                          #  data = dict( 
+  print(' was', len(datB), 'before delLang')
+  datC = delByLang(   r, datB )                          #    k = index,
+  print(' was', len(datC), 'before dlSingls')
+  datD = delSingles(  r, datC )                          #    v = text  )
+  print(' was', len(datC), 'before delVid')
+  datE = delVideos(   r, datD )         
+  print(' was', len(datC), 'before dlReiss')
+  datF = delReissus(  r, datE )                          #  reissue data pairs can be damaged if del before the Language test         
+  for k, v in datF.items(): 
+    print(' r', k, ' ', v )
+  for x in datF.values():                                
+    allAlbums.append( x + '  ;by  ' + TheArtist )        #  saved in a global var
+  aCounts[ TheArtist ] = len( datF )                     #  'append' each n of records to the dict
+  print( len(datF), ' for ', A.index(TheArtist), ' ', TheArtist, sp )
+
+# -----
+def CallRange( b, c ):
+  for a in range( b, c ):                       
+    sr( A[a] )                                           #  call the function
+    time.sleep(1)                                        #  to avoid a spam flag
+  print( [ aCounts[A[i]] for i in range( b, c ) ] )
+
+# -----
+def CallForty( b ):
+  for a in range( b, b + 40 ): 
+    sr( A[a] )                                           #  call the function
+    time.sleep(1)                                        #  to avoid a spam flag
+
+# -----  to save the list of results                     #  utf = required for int'l chars
+with open('7nR.txt', 'w', encoding = 'utf-8') as f:      #  create the file if it does not yet exist
+  for val in allAlbums:
+    f.write( '%s\n' % val )                              #  format: 'albm  ;by  artst lineBreak'
+  for va2 in faildPage:             
+    p2 = va2 + '  page did not load'                     #  appended in the same col.
+    f.write( '%s\n' % p2 )
+  for va3 in faildDiscog:
+    p3 = va3 + '  page had no discog. section'
+    f.write( '%s\n' % p3 )                               #  appended in the same col.
+
+f.close()                                                
+
+# -----  to save the dict of counts
+f = open('7Dict.txt', 'w')                             #  copy+paste into xlsx later
+f.write( str( aCounts ) )
+f.close()
+
+
+
+########################################################
+# -----  for debug           tryToScrape(A[480])
+
+tA   = A[479]
+url  = 'https://en.wikipedia.org/wiki/' + tA ; respons = requests.get(url)
+soup = BeautifulSoup( respons.text,'html.parser' )
+s    = findStart( tA, soup ) ; p = s.find_previous() ;  r = p.find_all_next()   
+sc   = getSections( r ) ;  data = getResults( r, sc )
+ 
+True in (e in r[18].parent.text.upper() for e in formatWds)
+
+########################################################
+#  more debug
+
+b = []
+for tag in r:
+  if tag.get('id'):               
+  #  if (True in (e in tag.get('id') for e in endWords)):
+    b.append(tag)
+    print(r.index(tag))
+
+########################################################
+# -----  to debug the idSec() function
+
+tg   = r[97]
+tTx  = tg.text
+UTX  = tTx.upper()
+ritg = r.index(tg)
+if tg.get('id'): tp = 'id'
+else: tp = tg.name
+
+newSc   = Sec( ritg, '', tTx, tp )
+ 
+# ---  -  -  Sec( .rnk, .sgo, .txt, .typ )
+def idSec( allSc, tg, ritg, tp ):                     
+
+
+
+################################################################################################################
+################################################################################################################
+##  rough drafts  ##############################################################################################
+
+#-----
+  for va2 in faildPage:             
+    p2 = va2 + '  page did not load'                     #  appended in the same col.
+    pywriter.writerow( [p2.encode('utf-8')] )
+  for va3 in faildDiscog:
+    p3 = va3 + '  page had no discog. section'
+    pywriter.writerow( [p3.encode('utf-8')] )            #  appended in the same col.
+
+
+#-----
+with open('saaaaavvve.csv', 'w') as csvfile:                      #  create the file if it does not yet exist
+  pywriter = csv.writer( csvfile, lineterminator = '\n' )
+  for val in allAlbums:
+    pywriter.writerow( [val] )
+
+csvfile.close()
+
+#-----  data in 1 row instead of 1 column
+with open('saaav.csv', 'w') as csvfile:              #  create the file if it does not yet exist
+  pywriter = csv.writer( csvfile )
+  pywriter.writerows(zip(allAlbums))
+
+csvfile.close()
+
+
+# -----
+                     
+
+
+
+
+
+
+
+
+
+
+
+
+
+##  (end of) rough drafts  ##############################################################################################
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
